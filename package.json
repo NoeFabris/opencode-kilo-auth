@@ -1,0 +1,48 @@
+{
+  "name": "opencode-kilo-auth",
+  "version": "0.1.0",
+  "description": "Kilo device auth plugin for OpenCode",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "license": "MIT",
+  "author": "noefabris",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NoeFabris/opencode-kilo-auth.git"
+  },
+  "homepage": "https://github.com/NoeFabris/opencode-kilo-auth#readme",
+  "bugs": {
+    "url": "https://github.com/NoeFabris/opencode-kilo-auth/issues"
+  },
+  "keywords": [
+    "opencode",
+    "kilo",
+    "kilocode",
+    "oauth",
+    "auth",
+    "plugin"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "models": "node ./dist/scripts/fetch-models.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.0.0-alpha.1",
+    "@opencode-ai/plugin": "^0.15.30",
+    "open": "^10.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.0.0"
+  }
+}
