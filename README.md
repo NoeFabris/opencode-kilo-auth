@@ -16,7 +16,7 @@ Add the plugin to your `opencode.json` (usually in `~/.config/opencode/opencode.
 ```json
 {
   "plugin": [
-    "file:///Users/noefabris/Coding/opencode-plugin/opencode-kilo-auth/dist/index.js"
+    "/path/to/cloned-repo"
   ]
 }
 ```
