@@ -1,6 +1,6 @@
 {
-  "name": "opencode-kilo-auth",
-  "version": "0.1.0",
+  "name": "opencode-kilo-authentication",
+  "version": "1.0.0",
   "description": "Kilo device auth plugin for OpenCode",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
