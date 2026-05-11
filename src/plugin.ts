@@ -17,6 +17,12 @@ import {
 import { initiateDeviceAuth, waitForDeviceAuth } from "./device-auth";
 import { fetchKiloModels } from "./models";
 import { loadStoredAuth, saveStoredAuth } from "./storage";
+import {
+  fetchProfile,
+  fetchBalance,
+  formatBalance,
+  type ProfileResponse,
+} from "./api";
 
 function getEditorName(): string {
   return process.env[ENV_KILOCODE_EDITOR_NAME] ?? DEFAULT_EDITOR_NAME;
@@ -26,37 +32,6 @@ const DEFAULT_CONFIG_PATH = path.join(os.homedir(), ".config", "opencode", "open
 const ENV_OPENCODE_CONFIG = "OPENCODE_CONFIG";
 const ENV_OPENCODE_CONFIG_DIR = "OPENCODE_CONFIG_DIR";
 const ENV_OPENCODE_CONFIG_CONTENT = "OPENCODE_CONFIG_CONTENT";
-
-type Organization = {
-  id: string;
-  name: string;
-  role: string;
-};
-
-type ProfileResponse = {
-  user?: {
-    email?: string;
-    name?: string;
-  };
-  email?: string;
-  name?: string;
-  organizations?: Organization[];
-};
-
-async function fetchProfile(token: string): Promise<ProfileResponse> {
-  const response = await fetch(`${KILO_API_BASE}/api/profile`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch profile: ${response.status}`);
-  }
-
-  return (await response.json()) as ProfileResponse;
-}
 
 function shouldPromptForOrg(): boolean {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
@@ -83,12 +58,17 @@ async function selectOrganization(token: string, profile?: ProfileResponse): Pro
   const orgs = resolvedProfile?.organizations ?? [];
   if (orgs.length === 0) return undefined;
 
+  const [personalBalance, ...orgBalances] = await Promise.all([
+    fetchBalance(token),
+    ...orgs.map((org) => fetchBalance(token, org.id)),
+  ]);
+
   const choice = await prompts.select({
     message: "Select Kilo organization",
     options: [
-      { label: "Personal", value: "personal" },
-      ...orgs.map((org) => ({
-        label: `${org.name} (${org.role})`,
+      { label: `Personal — ${formatBalance(personalBalance)}`, value: "personal" },
+      ...orgs.map((org, index) => ({
+        label: `${org.name} (${org.role}) — ${formatBalance(orgBalances[index] ?? null)}`,
         value: org.id,
       })),
     ],
@@ -274,6 +254,7 @@ export const KiloAuthPlugin: Plugin = async (input) => {
                 const selectedOrg =
                   process.env[ENV_KILO_ORG_ID] ?? (await selectOrganization(result.token).catch(() => undefined));
                 const organizationId = resolveOrganization(selectedOrg, stored?.organizationId);
+
                 await saveStoredAuth({
                   token: result.token,
                   organizationId,
@@ -347,6 +328,76 @@ export const KiloAuthPlugin: Plugin = async (input) => {
                   organizationId,
                   updatedAt: Date.now(),
                 });
+
+                return {
+                  type: "success",
+                  refresh: stored.token,
+                  access: stored.token,
+                  expires: Date.now() + TOKEN_EXPIRY_MS,
+                };
+              },
+            };
+          },
+        },
+        {
+          type: "oauth",
+          label: "Kilo (Switch organization)",
+          async authorize() {
+            if (!shouldPromptForOrg()) {
+              return {
+                url: "",
+                method: "auto",
+                instructions: "Kilo organization switching is only available in the CLI.",
+                callback: async () => ({ type: "failed" }),
+              };
+            }
+
+            const stored = await loadStoredAuth();
+            if (!stored?.token) {
+              return {
+                url: "",
+                method: "auto",
+                instructions: "No stored Kilo auth found. Run Kilo (Device Authorization) first.",
+                callback: async () => ({ type: "failed" }),
+              };
+            }
+
+            const profile = await fetchProfile(stored.token).catch(() => undefined);
+            const label = formatAccountLabel(profile);
+            if (label) {
+              prompts.log.info(`Kilo account: ${label}`);
+            }
+
+            const selectedOrg = await selectOrganization(stored.token, profile).catch(() => undefined);
+            if (selectedOrg === undefined) {
+              return {
+                url: "",
+                method: "auto",
+                instructions: "Organization switch cancelled.",
+                callback: async () => ({ type: "failed" }),
+              };
+            }
+
+            const organizationId = selectedOrg ?? undefined;
+
+            return {
+              url: "",
+              instructions: "Switching active Kilo organization...",
+              method: "auto",
+              callback: async () => {
+                await saveStoredAuth({
+                  token: stored.token,
+                  organizationId,
+                  updatedAt: Date.now(),
+                });
+
+                const newBalance = await fetchBalance(stored.token, organizationId);
+                const orgLabel =
+                  organizationId === undefined
+                    ? "Personal"
+                    : profile?.organizations?.find((org) => org.id === organizationId)?.name ??
+                      organizationId;
+                prompts.log.success(`Active Kilo organization: ${orgLabel} — ${formatBalance(newBalance)}`);
 
                 return {
                   type: "success",

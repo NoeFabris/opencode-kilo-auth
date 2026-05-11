@@ -83,6 +83,12 @@ OpenRouter supports Anthropic reasoning via the unified `reasoning` parameter (t
 - `high` → `reasoning: { effort: "high" }`
 - `max` → `reasoning: { effort: "xhigh" }`
 
+## Switch organization
+
+Run `opencode auth login`, choose **Other**, enter `kilo`, then pick **Kilo (Switch organization)**.
+The picker lists Personal and each org you belong to with the current balance next to each option,
+and updates the stored active org for subsequent requests.
+
 ## Fetch models (optional)
 
 You can fetch Kilo models into OpenCode’s model format:
@@ -117,4 +123,5 @@ KILOCODE_AUTH_PATH=/path/to/kilocode-auth.json
 
 ## Notes
 
-- Organization selection is shown automatically during `opencode auth login` if your account has orgs (CLI only). For `/connect`, set `KILO_ORG_ID` or edit the stored auth file.
+- Organization selection is shown automatically during `opencode auth login` if your account has orgs (CLI only), with the current balance shown next to each option. For `/connect`, set `KILO_ORG_ID` or edit the stored auth file.
+- `KILO_ORG_ID` takes precedence at request time, so an interactive switch only affects the stored org when the env var is unset.
