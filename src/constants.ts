@@ -1,8 +1,11 @@
 export const ENV_KILO_API_URL = "KILO_API_URL";
 export const DEFAULT_KILO_API_URL = "https://api.kilo.ai";
 
-export const KILO_API_BASE = process.env[ENV_KILO_API_URL] ?? DEFAULT_KILO_API_URL;
+export const KILO_API_BASE = (process.env[ENV_KILO_API_URL] ?? DEFAULT_KILO_API_URL).replace(/\/+$/, "");
 export const KILO_OPENROUTER_BASE = `${KILO_API_BASE}/api/openrouter`;
+export const KILO_PROVIDER_ID = "kilo";
+export const KILO_OAUTH_METHOD_ID = "device";
+export const KILO_PROVIDER_PACKAGE = "@opencode/ai/providers/openrouter";
 
 export const ENV_KILO_ORG_ID = "KILO_ORG_ID";
 export const ENV_KILOCODE_AUTH_PATH = "KILOCODE_AUTH_PATH";

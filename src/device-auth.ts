@@ -1,4 +1,5 @@
-import { KILO_API_BASE, POLL_INTERVAL_MS } from "./constants";
+import { setTimeout as sleep } from "node:timers/promises";
+import { KILO_API_BASE, POLL_INTERVAL_MS } from "./constants.js";
 
 export type DeviceAuthInitiateResponse = {
   code: string;
@@ -12,12 +13,13 @@ export type DeviceAuthPollResponse = {
   userEmail?: string;
 };
 
-export async function initiateDeviceAuth(): Promise<DeviceAuthInitiateResponse> {
+export async function initiateDeviceAuth(signal?: AbortSignal): Promise<DeviceAuthInitiateResponse> {
   const response = await fetch(`${KILO_API_BASE}/api/device-auth/codes`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]),
   });
 
   if (!response.ok) {
@@ -31,8 +33,8 @@ export async function initiateDeviceAuth(): Promise<DeviceAuthInitiateResponse> 
   return data;
 }
 
-async function pollDeviceAuth(code: string): Promise<DeviceAuthPollResponse> {
-  const response = await fetch(`${KILO_API_BASE}/api/device-auth/codes/${code}`);
+async function pollDeviceAuth(code: string, signal: AbortSignal): Promise<DeviceAuthPollResponse> {
+  const response = await fetch(`${KILO_API_BASE}/api/device-auth/codes/${encodeURIComponent(code)}`, { signal });
 
   if (response.status === 202) return { status: "pending" };
   if (response.status === 403) return { status: "denied" };
@@ -46,18 +48,19 @@ async function pollDeviceAuth(code: string): Promise<DeviceAuthPollResponse> {
   return data;
 }
 
-export async function waitForDeviceAuth(code: string, expiresIn: number): Promise<DeviceAuthPollResponse> {
-  const maxAttempts = Math.ceil((expiresIn * 1000) / POLL_INTERVAL_MS);
-
-  for (const _ of Array.from({ length: maxAttempts })) {
-    const result = await pollDeviceAuth(code);
-
-    if (result.status === "approved") return result;
-    if (result.status === "denied") return result;
-    if (result.status === "expired") return result;
-
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+export async function waitForDeviceAuth(code: string, expiresIn: number, signal?: AbortSignal): Promise<DeviceAuthPollResponse> {
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) return { status: "expired" };
+  const deadline = AbortSignal.timeout(Math.ceil(expiresIn * 1000));
+  const lifetime = AbortSignal.any([deadline, ...(signal ? [signal] : [])]);
+  try {
+    while (true) {
+      lifetime.throwIfAborted();
+      const result = await pollDeviceAuth(code, AbortSignal.any([lifetime, AbortSignal.timeout(10_000)]));
+      if (result.status !== "pending") return result;
+      await sleep(POLL_INTERVAL_MS, undefined, { signal: lifetime });
+    }
+  } catch (error) {
+    if (deadline.aborted && !signal?.aborted) return { status: "expired" };
+    throw error;
   }
-
-  return { status: "expired" };
 }

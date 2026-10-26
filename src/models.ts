@@ -1,22 +1,23 @@
 import {
-  KILO_API_BASE,
   KILO_OPENROUTER_BASE,
   HEADER_ORGANIZATION_ID,
   HEADER_EDITOR_NAME,
   ENV_KILOCODE_EDITOR_NAME,
   DEFAULT_EDITOR_NAME,
-} from "./constants";
+} from "./constants.js";
 
 export type KiloModelsOptions = {
   token?: string;
   organizationId?: string;
   baseURL?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type OpenRouterModel = {
   id: string;
   name: string;
+  created?: number;
   description?: string;
   context_length: number;
   max_completion_tokens?: number | null;
@@ -36,6 +37,23 @@ type OpenRouterModel = {
   supported_parameters?: string[];
 };
 
+export type KiloModelConfig = {
+  modelID: string;
+  name: string;
+  family?: string;
+  releaseDate?: string;
+  capabilities: {
+    tools: boolean;
+    input: string[];
+    output: string[];
+    temperature: boolean;
+    reasoning: { supported: boolean };
+  };
+  limit: { context: number; output: number };
+  cost?: { input: number; output: number; cache?: { read?: number; write?: number } };
+  variants?: Array<{ id: string; body: Record<string, unknown> }>;
+};
+
 type OpenRouterModelsResponse = {
   data: OpenRouterModel[];
 };
@@ -43,8 +61,9 @@ type OpenRouterModelsResponse = {
 function parsePrice(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed)) return undefined;
-  return parsed;
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  // OpenRouter quotes per token; OpenCode uses USD per million tokens.
+  return parsed * 1_000_000;
 }
 
 function mapModalities(values: string[] | null | undefined): Array<"text" | "audio" | "image" | "video" | "pdf"> {
@@ -74,28 +93,8 @@ function extractFamily(modelId: string): string | undefined {
   return undefined;
 }
 
-function getKiloUrlFromToken(defaultUrl: string, token?: string): string {
-  if (!token) return defaultUrl;
-  try {
-    const parts = token.split(":");
-    if (parts.length > 1 && parts[0]?.startsWith("http")) {
-      return parts[0];
-    }
-  } catch {
-    // ignore token parsing errors
-  }
-  return defaultUrl;
-}
-
-export async function fetchKiloModels(options: KiloModelsOptions = {}): Promise<Record<string, any>> {
-  const baseURL = options.baseURL
-    ? options.baseURL.replace(/\/+$/, "")
-    : options.organizationId
-      ? `${KILO_API_BASE}/api/organizations/${options.organizationId}`
-      : KILO_OPENROUTER_BASE;
-
-  const finalBaseURL = getKiloUrlFromToken(baseURL, options.token);
-  const modelsURL = `${finalBaseURL.replace(/\/+$/, "")}/models`;
+export async function fetchKiloModels(options: KiloModelsOptions = {}): Promise<Record<string, KiloModelConfig>> {
+  const modelsURL = `${(options.baseURL ?? KILO_OPENROUTER_BASE).replace(/\/+$/, "")}/models`;
   const editorName = process.env[ENV_KILOCODE_EDITOR_NAME] ?? DEFAULT_EDITOR_NAME;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -113,16 +112,14 @@ export async function fetchKiloModels(options: KiloModelsOptions = {}): Promise<
 
   const response = await fetch(modelsURL, {
     headers,
-    signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+    signal: AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 10_000), ...(options.signal ? [options.signal] : [])]),
   });
   if (!response.ok) {
     throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
   }
 
   const json = (await response.json()) as OpenRouterModelsResponse;
-  const today = new Date().toISOString().split("T")[0] ?? "";
-
-  const models: Record<string, any> = {};
+  const models: Record<string, KiloModelConfig> = {};
 
   for (const model of json.data ?? []) {
     if (model.architecture?.output_modalities?.includes("image")) continue;
@@ -137,47 +134,48 @@ export async function fetchKiloModels(options: KiloModelsOptions = {}): Promise<
     const supported = model.supported_parameters ?? [];
 
     const supportsTools = supported.includes("tools");
-    const supportsReasoning = supported.includes("reasoning");
+    const supportsReasoning = supported.includes("reasoning") || supported.includes("include_reasoning");
     const supportsTemperature = supported.includes("temperature");
-    const supportsImages = inputModalities.includes("image");
 
     const maxOutput =
       model.top_provider?.max_completion_tokens ??
       model.max_completion_tokens ??
       Math.ceil(model.context_length * 0.2);
 
-    const transformed: Record<string, any> = {
-      id: model.id,
+    const transformed: KiloModelConfig = {
+      modelID: model.id,
       name: model.name,
       family: extractFamily(model.id),
-      release_date: today,
-      attachment: supportsImages,
-      reasoning: supportsReasoning,
-      temperature: supportsTemperature,
-      tool_call: supportsTools,
+      ...(model.created ? { releaseDate: new Date(model.created * 1000).toISOString().slice(0, 10) } : {}),
+      capabilities: {
+        tools: supportsTools,
+        input: mapModalities(inputModalities),
+        output: mapModalities(outputModalities),
+        temperature: supportsTemperature,
+        reasoning: { supported: supportsReasoning },
+      },
       limit: {
         context: model.context_length,
         output: maxOutput,
       },
-      options: {
-        ...(model.description ? { description: model.description } : {}),
-      },
-      ...(inputModalities.length > 0 || outputModalities.length > 0
-        ? {
-            modalities: {
-              input: mapModalities(inputModalities),
-              output: mapModalities(outputModalities),
-            },
-          }
-        : {}),
+      ...(supportsReasoning && model.id.toLowerCase().startsWith("anthropic/") ? {
+        variants: [
+          { id: "high", body: { reasoning: { effort: "high" } } },
+          { id: "max", body: { reasoning: { effort: "xhigh" } } },
+        ],
+      } : {}),
     };
 
     if (inputPrice !== undefined && outputPrice !== undefined) {
       transformed.cost = {
         input: inputPrice,
         output: outputPrice,
-        ...(cacheRead !== undefined ? { cache_read: cacheRead } : {}),
-        ...(cacheWrite !== undefined ? { cache_write: cacheWrite } : {}),
+        ...(cacheRead !== undefined || cacheWrite !== undefined ? {
+          cache: {
+            ...(cacheRead !== undefined ? { read: cacheRead } : {}),
+            ...(cacheWrite !== undefined ? { write: cacheWrite } : {}),
+          },
+        } : {}),
       };
     }
 

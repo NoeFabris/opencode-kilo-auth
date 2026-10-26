@@ -1,57 +1,86 @@
 # opencode-kilo-auth
 
-Kilo device authorization plugin for OpenCode. It adds a Kilo OAuth device flow and returns tokens to OpenCode, while also storing a copy in a dedicated Kilo auth file.
+Kilo device authorization for **OpenCode v2.1.4 and newer**. This version uses the v2 integration and provider APIs; OpenCode v1 needs the older plugin release.
 
-## Install
+## Build and install
+
+Requires Node.js 20 or newer.
 
 ```bash
-npm install
+npm ci
 npm run build
+npm test
+npm run install:opencode
 ```
 
-## Configure OpenCode
+The installer copies a self-contained build to:
 
-Add the plugin to your `opencode.json` (usually in `~/.config/opencode/opencode.json`).
+```text
+~/.local/share/opencode/plugin-builds/kilo-auth-v2.0.1/
+```
+
+It enables that directory in `~/.config/opencode/opencode.json` or `opencode.jsonc`, preserves unrelated settings and JSONC comments, and creates a dated backup before changing an existing config. `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME`, and `XDG_DATA_HOME` are respected. Existing Kilo plugin entries are replaced; other plugins are kept.
+
+Restart OpenCode, or run `opencode reload` to load the plugin in an already running service. Verify it with `opencode plugin list`.
+
+To configure a build yourself, add its **directory** to the v2 `plugins` array:
 
 ```json
 {
-  "plugin": [
-    "/path/to/cloned-repo"
-  ]
+  "plugins": ["/path/to/cloned-repo/dist"]
 }
 ```
 
-## Add a Kilo provider
+The bundled `dist` directory can be loaded without installing its runtime dependencies elsewhere.
 
-OpenCode does not ship a Kilo provider, so you must define one in `opencode.json`. Minimal example:
+## Connect Kilo
+
+```bash
+opencode auth login kilo --method device
+```
+
+You can also use `/connect`, select **Kilo**, and choose **Kilo (Device Authorization)**. Open the displayed URL and enter the device code. Organization selection is a form field in both the CLI and `/connect`: enter the organization ID, or leave it blank for a personal account. `KILO_ORG_ID` overrides the form.
+
+API keys and `KILO_API_KEY` are also supported. OpenCode manages the active credential; switching accounts updates request authentication and organization headers immediately.
+
+A login previously saved in `~/.kilocode/opencode-kilo-auth.json` is imported once if OpenCode has no active Kilo connection. An existing connection is preserved. Disconnecting afterward does not trigger another import.
+
+## Sync models
+
+Kilo models refresh automatically inside OpenCode when the plugin loads and when you connect or switch Kilo accounts. The refresh runs in the background and updates `/models` without rewriting your configuration or removing your custom models.
+
+To refresh the catalog yourself, use the built-in command picker or type:
+
+```text
+/kilo-sync-models
+```
+
+The command uses your active OpenCode Kilo connection, including the selected organization, and makes refreshed models available immediately. A failed refresh keeps the last successful catalog for that account. You do not need to run an npm command for normal use.
+
+The optional `npm run sync-models` maintenance script exports the catalog into `providers.kilo.models` for a configuration you want to keep on disk. That script supports JSON/JSONC, backs up existing files, and migrates only a legacy `provider.kilo` entry. It replaces the model definitions in that file; the normal in-app refresh leaves them unchanged.
+
+A minimal native v2 provider configuration is:
 
 ```json
 {
-  "provider": {
+  "providers": {
     "kilo": {
       "name": "Kilo",
-      "api": "https://api.kilo.ai/api/openrouter/",
-      "npm": "@openrouter/ai-sdk-provider",
       "env": ["KILO_API_KEY"],
-      "options": {
-        "baseURL": "https://api.kilo.ai/api/openrouter/"
+      "package": "@opencode/ai/providers/openrouter",
+      "settings": {
+        "baseURL": "https://api.kilo.ai/api/openrouter"
       },
       "models": {
         "anthropic/claude-sonnet-4": {
-          "id": "anthropic/claude-sonnet-4",
           "name": "Claude Sonnet 4",
-          "release_date": "2025-01-01",
-          "attachment": false,
-          "reasoning": true,
-          "temperature": true,
-          "tool_call": true,
-          "limit": {
-            "context": 200000,
-            "output": 64000
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"],
+            "reasoning": { "supported": true }
           },
-          "options": {
-            "description": "Kilo via OpenRouter"
-          }
+          "limit": { "context": 200000, "output": 64000 }
         }
       }
     }
@@ -59,62 +88,30 @@ OpenCode does not ship a Kilo provider, so you must define one in `opencode.json
 }
 ```
 
-## CLI auth login (optional)
+Existing legacy provider definitions remain readable by OpenCode v2. Anthropic reasoning models receive `high` and `max` variants using native v2 `body.reasoning` settings. Model prices are converted from Kilo's per-token prices to OpenCode's per-million-token units.
 
-If you want to use `opencode auth login`, choose **Other** and enter `kilo` as the provider ID.  
-This lets the plugin run its device auth flow (and optional org prompt).
-
-## Sync models (manual)
-
-Model sync is now manual to avoid interfering with OpenCode startup.
-
-Run `opencode auth login`, choose **Other**, enter `kilo`, then pick **Kilo (Sync models)**.
-It will show the logged-in account and prompt before writing the models into `opencode.json`.
-
-By default it writes to `~/.config/opencode/opencode.json`. Override with `OPENCODE_CONFIG`
-or `OPENCODE_CONFIG_DIR`.
-
-### Anthropic reasoning variants (OpenRouter)
-
-OpenRouter supports Anthropic reasoning via the unified `reasoning` parameter (the old
-`:thinking` model variants are deprecated). During sync, this plugin injects `high` and
-`max` variants for Anthropic models that advertise reasoning support, using:
-
-- `high` → `reasoning: { effort: "high" }`
-- `max` → `reasoning: { effort: "xhigh" }`
-
-## Fetch models (optional)
-
-You can fetch Kilo models into OpenCode’s model format:
+To print model definitions without changing configuration:
 
 ```bash
-KILO_API_KEY=your_token KILO_ORG_ID=org-123 npm run build
-KILO_API_KEY=your_token KILO_ORG_ID=org-123 node dist/scripts/fetch-models.js > kilo-models.json
+npm run models --silent > kilo-models.json
 ```
 
-Then paste the JSON into `provider.kilo.models`.
+## Auth storage and environment
 
-## Auth storage
+Device logins are also saved with owner-only permissions in:
 
-The plugin also stores tokens in:
-
-```
+```text
 ~/.kilocode/opencode-kilo-auth.json
 ```
 
-Override with:
+| Variable | Purpose |
+| --- | --- |
+| `KILO_API_KEY` | API key or token used for model fetching and environment authentication. |
+| `KILO_API_URL` | Base API URL; defaults to `https://api.kilo.ai`. |
+| `KILO_ORG_ID` | Organization ID for team usage. |
+| `KILOCODE_EDITOR_NAME` | Overrides the `X-KILOCODE-EDITORNAME` header. |
+| `KILOCODE_AUTH_PATH` | Overrides the saved Kilo auth file path. |
 
-```
-KILOCODE_AUTH_PATH=/path/to/kilocode-auth.json
-```
+## v2 migration reference
 
-## Environment variables
-
-- `KILO_API_URL` (optional): Override base API URL (default `https://api.kilo.ai`).
-- `KILO_ORG_ID` (optional): Organization ID for team usage.
-- `KILOCODE_EDITOR_NAME` (optional): Overrides `X-KILOCODE-EDITORNAME`.
-- `KILOCODE_AUTH_PATH` (optional): Override auth file path.
-
-## Notes
-
-- Organization selection is shown automatically during `opencode auth login` if your account has orgs (CLI only). For `/connect`, set `KILO_ORG_ID` or edit the stored auth file.
+The implementation follows OpenCode's [v1 plugin migration guide](https://dev.opencode.ai/v2/docs/build/plugins/migrate-v1/): a default `Plugin.define` export registers integration methods and a provider-scoped request hook through `setup(ctx)`. It uses the native OpenRouter runtime in place of the v1 AI SDK adapter.

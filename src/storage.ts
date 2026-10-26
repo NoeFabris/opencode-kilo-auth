@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ENV_KILOCODE_AUTH_PATH } from "./constants";
+import { ENV_KILOCODE_AUTH_PATH } from "./constants.js";
 
 export type StoredAuth = {
   token: string;
@@ -35,4 +35,5 @@ export async function saveStoredAuth(auth: StoredAuth): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const payload = JSON.stringify(auth, null, 2);
   await fs.writeFile(file, payload, { mode: 0o600 });
+  await fs.chmod(file, 0o600);
 }
